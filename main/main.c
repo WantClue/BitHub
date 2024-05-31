@@ -15,10 +15,14 @@
 #include "sdkconfig.h"
 #include "lwip/inet.h"
 
+#include "ssd1306.h"
+#include "font8x8_basic.h"
+
 #define WIFI_SSID CONFIG_WIFI_SSID
 #define WIFI_PASSWORD CONFIG_WIFI_PASSWORD
 
 static const char *TAG = "wifi_scan";
+
 static EventGroupHandle_t wifi_event_group;
 const int CONNECTED_BIT = BIT0;
 
@@ -287,15 +291,35 @@ static void scan_subnet_task(void *pvParameters) {
     esp_http_client_cleanup(client);
 }
 
+void ssd1306_task(void *pvParameters) {
+    SSD1306_t dev;
+    ESP_LOGI(TAG, "CONFIG_SDA_GPIO=%d", CONFIG_SDA_GPIO);
+    ESP_LOGI(TAG, "CONFIG_SCL_GPIO=%d", CONFIG_SCL_GPIO);
+    ESP_LOGI(TAG, "CONFIG_RESET_GPIO=%d", CONFIG_RESET_GPIO);
+    i2c_master_init(&dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
+    ssd1306_init(&dev, 128, 64);
+    ssd1306_clear_screen(&dev, false);
+    ssd1306_contrast(&dev, 0xff);
+    ssd1306_display_text(&dev, 0, "Hello, World!", 13, false);
+    
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init());
     initialise_wifi();
 
     xEventGroupWaitBits(wifi_event_group, CONNECTED_BIT, false, true, portMAX_DELAY);
+    // Create a task to initialize and display hashrate on the SSD1306 display
+    xTaskCreate(&ssd1306_task, "ssd1306_task", 4096, NULL, 5, NULL);
 
     // Create a task to scan the entire subnet every 5 minutes
     xTaskCreate(&scan_subnet_task, "scan_subnet_task", 8192, NULL, 5, NULL);
 
     // Create a task to rescan valid IPs every 10 seconds
     xTaskCreate(&rescan_valid_ips_task, "rescan_valid_ips_task", 8192, NULL, 5, NULL);
+
+    
 }
