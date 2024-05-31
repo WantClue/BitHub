@@ -328,8 +328,8 @@ void ssd1306_task(void *pvParameters) {
     while (1) {
         // Update the display with the combined hashrate
         snprintf(hashrate_str, sizeof(hashrate_str), "Hashrate: %.2f", combined_hashrate);
-        ssd1306_clear_line(&dev, 2, true);
-        ssd1306_display_text(&dev, 2, hashrate_str, strlen(hashrate_str), true);
+        ssd1306_clear_line(&dev, 2, false);
+        ssd1306_display_text(&dev, 2, hashrate_str, strlen(hashrate_str), false);
 
         // Delay for a while before updating again
         vTaskDelay(pdMS_TO_TICKS(5000));
