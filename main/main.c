@@ -34,6 +34,10 @@ static char valid_ips[MAX_VALID_IPS][16];
 static int valid_ip_count = 0;
 static bool subnet_scan_done = false;
 
+// float for combined hashrate
+static float combined_hashrate = 0.0;
+static float current_scan_hashrate = 0.0;
+
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -159,6 +163,16 @@ static esp_err_t http_event_handler(esp_http_client_event_t *evt) {
                 memcpy(output_buffer + output_len, evt->data, evt->data_len);
                 output_len += evt->data_len;
                 output_buffer[output_len] = '\0';  // Null-terminate the string
+
+                // Parse hashrate and update combined_hashrate
+                cJSON *json = cJSON_Parse(output_buffer);
+                if (json != NULL) {
+                    cJSON *hashrate = cJSON_GetObjectItem(json, "hashRate");
+                    if (hashrate != NULL) {
+                        current_scan_hashrate += (float) hashrate->valuedouble;
+                    }
+                    cJSON_Delete(json);
+                }
             }
             break;
         case HTTP_EVENT_ON_FINISH:
@@ -188,6 +202,8 @@ static void rescan_valid_ips_task(void *pvParameters) {
 
     while (1) {
         if (subnet_scan_done) {
+            current_scan_hashrate = 0.0; // Reset the current scan hashrate
+
             for (int i = 0; i < valid_ip_count; i++) {
                 char url[50];
                 snprintf(url, sizeof(url), "http://%s/api/system/info", valid_ips[i]);
@@ -210,6 +226,8 @@ static void rescan_valid_ips_task(void *pvParameters) {
                     output_len = 0;
                 }
             }
+            combined_hashrate = current_scan_hashrate; // Update the combined hashrate
+
         }
         vTaskDelay(pdMS_TO_TICKS(10000));  // Delay 10 seconds
     }
@@ -239,6 +257,8 @@ static void scan_subnet_task(void *pvParameters) {
 
     while (1) {
         valid_ip_count = 0; // Reset valid IP count
+        current_scan_hashrate = 0.0; // Reset the current scan hashrate
+
 
         // Scan the entire subnet
         for (int i = 1; i <= 255; i++) {
@@ -283,6 +303,7 @@ static void scan_subnet_task(void *pvParameters) {
             }
         }
 
+        combined_hashrate = current_scan_hashrate; // Update the combined hashrate
         subnet_scan_done = true; // Set flag indicating that subnet scan is complete
         ESP_LOGI(TAG, "Subnet scan complete. Found %d valid IPs.", valid_ip_count);
         vTaskDelay(pdMS_TO_TICKS(300000));  // Delay 5 minutes before next scan
@@ -300,10 +321,18 @@ void ssd1306_task(void *pvParameters) {
     ssd1306_init(&dev, 128, 64);
     ssd1306_clear_screen(&dev, false);
     ssd1306_contrast(&dev, 0xff);
-    ssd1306_display_text(&dev, 0, "Hello, World!", 13, false);
+    ssd1306_display_text(&dev, 0, "Hello, Miner!", 13, false);
     
+    char hashrate_str[20];
+
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Update the display with the combined hashrate
+        snprintf(hashrate_str, sizeof(hashrate_str), "Hashrate: %.2f", combined_hashrate);
+        ssd1306_clear_line(&dev, 2, true);
+        ssd1306_display_text(&dev, 2, hashrate_str, strlen(hashrate_str), true);
+
+        // Delay for a while before updating again
+        vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
 
