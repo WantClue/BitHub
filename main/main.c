@@ -203,36 +203,40 @@ static void rescan_valid_ips_task(void *pvParameters) {
 
     while (1) {
         if (subnet_scan_done) {
-            current_scan_hashrate = 0.0; // Reset the current scan hashrate
+            float temp_valid_ip_scan_hashrate = 0.0; // Reset the temporary valid IP scan hashrate
 
             for (int i = 0; i < valid_ip_count; i++) {
                 char url[50];
                 snprintf(url, sizeof(url), "http://%s/api/system/info", valid_ips[i]);
                 esp_http_client_set_url(client, url);
 
-                ESP_LOGI(TAG, "Rescanning IP: %s", url); // Log the IP address being rescanned
+                ESP_LOGI(TAG, "Rescanning IP: %s", url);
 
                 esp_err_t err = esp_http_client_perform(client);
-
                 if (err == ESP_OK) {
                     if (output_buffer != NULL && is_valid_api_response(output_buffer)) {
                         ESP_LOGI(TAG, "Valid JSON response from IP: %s", valid_ips[i]);
+
+                        // Update the current scan hashrate
+                        cJSON *json = cJSON_Parse(output_buffer);
+                        if (json != NULL) {
+                            cJSON *hashrate = cJSON_GetObjectItem(json, "hashRate");
+                            if (hashrate != NULL) {
+                                temp_valid_ip_scan_hashrate += (float) hashrate->valuedouble;
+                            }
+                            cJSON_Delete(json);
+                        }
                     }
                 }
 
-                // Cleanup output buffer after each request
                 if (output_buffer != NULL) {
                     free(output_buffer);
                     output_buffer = NULL;
                     output_len = 0;
                 }
             }
-            combined_hashrate = current_scan_hashrate; // Update the combined hashrate
-            if (combined_hashrate > 0.0) {
-                last_combined_hashrate = combined_hashrate;
-            } else {
-                combined_hashrate = last_combined_hashrate;
-            }
+
+            combined_hashrate = temp_valid_ip_scan_hashrate > 0 ? temp_valid_ip_scan_hashrate : combined_hashrate;
         }
         vTaskDelay(pdMS_TO_TICKS(10000));  // Delay 10 seconds
     }
@@ -243,8 +247,6 @@ static void rescan_valid_ips_task(void *pvParameters) {
 static void scan_subnet_task(void *pvParameters) {
     esp_netif_ip_info_t ip_info;
     esp_netif_get_ip_info(esp_netif_get_handle_from_ifkey("WIFI_STA_DEF"), &ip_info);
-
-    // Get the base IP address by truncating the last octet
     char base_ip[16];
     snprintf(base_ip, sizeof(base_ip), IPSTR, IP2STR(&ip_info.ip));
     char *last_dot = strrchr(base_ip, '.');
@@ -253,16 +255,18 @@ static void scan_subnet_task(void *pvParameters) {
     }
 
     esp_http_client_config_t config = {
-        .url = "http://192.168.1.1/api/system/info", // Placeholder URL
+        .url = "http://192.168.1.1/api/system/info",
         .event_handler = http_event_handler,
-        .transport_type = HTTP_TRANSPORT_OVER_TCP,   // Disable TLS
-        .timeout_ms = 500,  // Set timeout for HTTP requests to 0.5 seconds
+        .transport_type = HTTP_TRANSPORT_OVER_TCP,
+        .timeout_ms = 500,
     };
     esp_http_client_handle_t client = esp_http_client_init(&config);
 
     while (1) {
-        valid_ip_count = 0; // Reset valid IP count
-        current_scan_hashrate = 0.0; // Reset the current scan hashrate
+        // Temporary variables to store the results of the current scan
+        int temp_valid_ip_count = 0;
+        char temp_valid_ips[MAX_VALID_IPS][16];
+        float temp_scan_hashrate = 0.0;
 
         // Scan the entire subnet
         for (int i = 1; i <= 255; i++) {
@@ -272,24 +276,28 @@ static void scan_subnet_task(void *pvParameters) {
             snprintf(url, sizeof(url), "http://%s/api/system/info", ip);
             esp_http_client_set_url(client, url);
 
-            ESP_LOGI(TAG, "Scanning IP: %s", url); // Log the IP address being scanned
+            ESP_LOGI(TAG, "Scanning IP: %s", url);
 
             esp_err_t err = esp_http_client_perform(client);
-
             if (err == ESP_OK) {
                 if (output_buffer != NULL) {
                     ESP_LOGI(TAG, "HTTP response from %s: %s", url, output_buffer);
                     if (is_valid_api_response(output_buffer)) {
                         ESP_LOGI(TAG, "Device found at IP: %s", url);
-                        if (valid_ip_count < MAX_VALID_IPS) {
-                            ESP_LOGI(TAG, "Before adding IP, valid_ip_count=%d", valid_ip_count);
-                            ESP_LOGI(TAG, "Adding IP: %s to valid_ips[%d]", ip, valid_ip_count);
-                            strncpy(valid_ips[valid_ip_count], ip, sizeof(valid_ips[0]) - 1);
-                            valid_ips[valid_ip_count][sizeof(valid_ips[0]) - 1] = '\0'; // Ensure null-termination
-                            ESP_LOGI(TAG, "Added IP to valid list: %s", valid_ips[valid_ip_count]);
-                            valid_ip_count++;
-                        } else {
-                            ESP_LOGW(TAG, "Max valid IP count reached. Ignoring IP: %s", url);
+                        if (temp_valid_ip_count < MAX_VALID_IPS) {
+                            strncpy(temp_valid_ips[temp_valid_ip_count], ip, sizeof(temp_valid_ips[0]) - 1);
+                            temp_valid_ips[temp_valid_ip_count][sizeof(temp_valid_ips[0]) - 1] = '\0';
+                            temp_valid_ip_count++;
+
+                            // Update the temporary scan hashrate
+                            cJSON *json = cJSON_Parse(output_buffer);
+                            if (json != NULL) {
+                                cJSON *hashrate = cJSON_GetObjectItem(json, "hashRate");
+                                if (hashrate != NULL) {
+                                    temp_scan_hashrate += (float) hashrate->valuedouble;
+                                }
+                                cJSON_Delete(json);
+                            }
                         }
                     } else {
                         ESP_LOGI(TAG, "Invalid JSON response from IP: %s", url);
@@ -299,7 +307,6 @@ static void scan_subnet_task(void *pvParameters) {
                 ESP_LOGI(TAG, "HTTP GET request failed for IP %s: %s", url, esp_err_to_name(err));
             }
 
-            // Cleanup output buffer after each request
             if (output_buffer != NULL) {
                 free(output_buffer);
                 output_buffer = NULL;
@@ -307,9 +314,14 @@ static void scan_subnet_task(void *pvParameters) {
             }
         }
 
-        combined_hashrate = current_scan_hashrate; // Update the combined hashrate
+        // Update the valid IPs and combined hashrate only if we found new valid IPs
+        if (temp_valid_ip_count > 0) {
+            valid_ip_count = temp_valid_ip_count;
+            memcpy(valid_ips, temp_valid_ips, sizeof(temp_valid_ips));
+            combined_hashrate = temp_scan_hashrate;
+        }
+
         subnet_scan_done = true; // Set flag indicating that subnet scan is complete
-        last_combined_hashrate = combined_hashrate;
         ESP_LOGI(TAG, "Subnet scan complete. Found %d valid IPs.", valid_ip_count);
         vTaskDelay(pdMS_TO_TICKS(300000));  // Delay 5 minutes before next scan
     }
