@@ -37,6 +37,7 @@ static bool subnet_scan_done = false;
 // float for combined hashrate
 static float combined_hashrate = 0.0;
 static float current_scan_hashrate = 0.0;
+static float last_combined_hashrate = 0.0;
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                int32_t event_id, void* event_data) {
@@ -227,7 +228,11 @@ static void rescan_valid_ips_task(void *pvParameters) {
                 }
             }
             combined_hashrate = current_scan_hashrate; // Update the combined hashrate
-
+            if (combined_hashrate > 0.0) {
+                last_combined_hashrate = combined_hashrate;
+            } else {
+                combined_hashrate = last_combined_hashrate;
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(10000));  // Delay 10 seconds
     }
@@ -258,7 +263,6 @@ static void scan_subnet_task(void *pvParameters) {
     while (1) {
         valid_ip_count = 0; // Reset valid IP count
         current_scan_hashrate = 0.0; // Reset the current scan hashrate
-
 
         // Scan the entire subnet
         for (int i = 1; i <= 255; i++) {
@@ -305,6 +309,7 @@ static void scan_subnet_task(void *pvParameters) {
 
         combined_hashrate = current_scan_hashrate; // Update the combined hashrate
         subnet_scan_done = true; // Set flag indicating that subnet scan is complete
+        last_combined_hashrate = combined_hashrate;
         ESP_LOGI(TAG, "Subnet scan complete. Found %d valid IPs.", valid_ip_count);
         vTaskDelay(pdMS_TO_TICKS(300000));  // Delay 5 minutes before next scan
     }
